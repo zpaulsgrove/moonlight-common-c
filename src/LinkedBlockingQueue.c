@@ -79,7 +79,13 @@ void LbqSignalQueueUserWake(PLINKED_BLOCKING_QUEUE queueHead) {
 }
 
 int LbqGetItemCount(PLINKED_BLOCKING_QUEUE queueHead) {
-    return queueHead->currentSize;
+    int count;
+
+    PltLockMutex(&queueHead->mutex);
+    count = queueHead->currentSize;
+    PltUnlockMutex(&queueHead->mutex);
+
+    return count;
 }
 
 int LbqOfferQueueItem(PLINKED_BLOCKING_QUEUE queueHead, void* data, PLINKED_BLOCKING_QUEUE_ENTRY entry) {

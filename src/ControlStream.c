@@ -85,6 +85,22 @@ static bool encryptedControlStream;
 static bool hdrEnabled;
 static SS_HDR_METADATA hdrMetadata;
 
+// hdrEnabled and hdrMetadata are published as a single transaction under this lock, so a reader
+// can never observe the new enabled flag alongside half-written display primaries.
+//
+// This lock must have process lifetime. LiGetCurrentHostDisplayHdrMode() and LiGetHdrMetadata()
+// are reachable before the first connection is started and after destroyControlStream() returns,
+// and locking a destroyed mutex is undefined behavior. It is therefore statically initialized and
+// never destroyed, and it is deliberately not a PLT_MUTEX, since those require a create/destroy
+// pair that cleanupPlatform() asserts is balanced.
+#if defined(LC_WINDOWS)
+static SRWLOCK hdrStateLock = SRWLOCK_INIT;
+#elif defined(__vita__) || defined(__WIIU__) || defined(__3DS__)
+#error This platform needs a statically initializable mutex for the HDR state lock
+#else
+static pthread_mutex_t hdrStateLock = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 static int intervalGoodFrameCount;
 static int intervalTotalFrameCount;
 static uint64_t intervalStartTimeMs;
@@ -274,6 +290,23 @@ static bool supportsIdrFrameRequest;
 #define LOSS_REPORT_INTERVAL_MS 50
 #define PERIODIC_PING_INTERVAL_MS 100
 
+// Never perform callbacks, I/O, or IDR requests while holding the HDR state lock
+static void lockHdrState(void) {
+#if defined(LC_WINDOWS)
+    AcquireSRWLockExclusive(&hdrStateLock);
+#else
+    pthread_mutex_lock(&hdrStateLock);
+#endif
+}
+
+static void unlockHdrState(void) {
+#if defined(LC_WINDOWS)
+    ReleaseSRWLockExclusive(&hdrStateLock);
+#else
+    pthread_mutex_unlock(&hdrStateLock);
+#endif
+}
+
 // Initializes the control stream
 int initializeControlStream(void) {
     stopping = false;
@@ -331,8 +364,10 @@ int initializeControlStream(void) {
     usePeriodicPing = APP_VERSION_AT_LEAST(7, 1, 415);
     encryptionCtx = PltCreateCryptoContext();
     decryptionCtx = PltCreateCryptoContext();
+    lockHdrState();
     hdrEnabled = false;
     memset(&hdrMetadata, 0, sizeof(hdrMetadata));
+    unlockHdrState();
 
     return 0;
 }
@@ -947,7 +982,9 @@ static void asyncCallbackThreadFunc(void* context) {
                 queuedCb = nextCb;
             }
 
-            ListenerCallbacks.setHdrMode(hdrEnabled);
+            // Read the flag through the locked getter so we never invoke the callback
+            // while holding the HDR state lock
+            ListenerCallbacks.setHdrMode(LiGetCurrentHostDisplayHdrMode());
             break;
 
         case IDX_SET_MOTION_EVENT:
@@ -1046,7 +1083,10 @@ static void controlReceiveThreadFunc(void* context) {
 
     while (!PltIsThreadInterrupted(&controlReceiveThread)) {
         ENetEvent event;
-        enet_uint32 waitTimeMs;
+
+        // Default to the same 10 ms wait we use when there is no pending RTO timer, so a path
+        // that reaches enet_socket_wait() without computing a timeout still sleeps sanely
+        enet_uint32 waitTimeMs = 10;
 
         PltLockMutex(&enetMutex);
 
@@ -1192,6 +1232,8 @@ static void controlReceiveThreadFunc(void* context) {
                 BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
 
                 BbGet8(&bb, &enableByte);
+
+                lockHdrState();
                 if (IS_SUNSHINE()) {
                     // Zero the metadata buffer to properly handle older servers if we have to add new fields
                     memset(&hdrMetadata, 0, sizeof(hdrMetadata));
@@ -1211,6 +1253,7 @@ static void controlReceiveThreadFunc(void* context) {
                 }
 
                 hdrEnabled = (enableByte != 0);
+                unlockHdrState();
             }
 
             // Process client callbacks in a separate thread
@@ -1959,14 +2002,31 @@ int startControlStream(void) {
 }
 
 bool LiGetCurrentHostDisplayHdrMode(void) {
-    return hdrEnabled;
+    bool enabled;
+
+    lockHdrState();
+    enabled = hdrEnabled;
+    unlockHdrState();
+
+    return enabled;
 }
 
 bool LiGetHdrMetadata(PSS_HDR_METADATA metadata) {
-    if (!IS_SUNSHINE() || !hdrEnabled) {
+    bool hasMetadata;
+
+    // IS_SUNSHINE() reads the server version, which is not covered by the HDR state lock
+    if (!IS_SUNSHINE()) {
         return false;
     }
 
-    *metadata = hdrMetadata;
-    return true;
+    // The enabled flag and the metadata must be read as one transaction, or we could copy out
+    // metadata that belongs to a different HDR state than the one we tested
+    lockHdrState();
+    hasMetadata = hdrEnabled;
+    if (hasMetadata) {
+        *metadata = hdrMetadata;
+    }
+    unlockHdrState();
+
+    return hasMetadata;
 }
