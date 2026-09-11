@@ -19,6 +19,8 @@ static PLT_THREAD decoderThread;
 static bool receivedDataFromPeer;
 static uint64_t firstDataTimeMs;
 static bool receivedFullFrame;
+static uint64_t videoBytesReceived;
+static bool videoStreamActive;
 
 // We can't request an IDR frame until the depacketizer knows
 // that a packet was lost. This timeout bounds the time that
@@ -42,6 +44,8 @@ void initializeVideoStream(void) {
     receivedDataFromPeer = false;
     firstDataTimeMs = 0;
     receivedFullFrame = false;
+    videoBytesReceived = 0;
+    videoStreamActive = false;
 }
 
 // Clean up the video stream
@@ -49,6 +53,8 @@ void destroyVideoStream(void) {
     PltDestroyCryptoContext(decryptionCtx);
     destroyVideoDepacketizer();
     RtpvCleanupQueue(&rtpQueue);
+    videoBytesReceived = 0;
+    videoStreamActive = false;
 }
 
 // UDP Ping proc
@@ -158,6 +164,9 @@ static void VideoReceiveThreadProc(void* context) {
             // Receive timed out; try again
             continue;
         }
+
+        // Count post-socket RTP bytes before FEC assembly
+        videoBytesReceived += (uint64_t)err;
 
         if (!receivedDataFromPeer) {
             receivedDataFromPeer = true;
@@ -312,6 +321,9 @@ void stopVideoStream(void) {
         rtpSocket = INVALID_SOCKET;
     }
 
+    videoStreamActive = false;
+    videoBytesReceived = 0;
+
     VideoCallbacks.cleanup();
 }
 
@@ -338,10 +350,14 @@ int startVideoStream(void* rendererContext, int drFlags) {
         return LastSocketError();
     }
 
+    videoBytesReceived = 0;
+    videoStreamActive = true;
+
     VideoCallbacks.start();
 
     err = PltCreateThread("VideoRecv", VideoReceiveThreadProc, NULL, &receiveThread);
     if (err != 0) {
+        videoStreamActive = false;
         VideoCallbacks.stop();
         closeSocket(rtpSocket);
         VideoCallbacks.cleanup();
@@ -351,6 +367,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
     if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
         err = PltCreateThread("VideoDec", VideoDecoderThreadProc, NULL, &decoderThread);
         if (err != 0) {
+            videoStreamActive = false;
             VideoCallbacks.stop();
             PltInterruptThread(&receiveThread);
             PltJoinThread(&receiveThread);
@@ -365,6 +382,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
         firstFrameSocket = connectTcpSocket(&RemoteAddr, AddrLen,
                                             FIRST_FRAME_PORT, FIRST_FRAME_TIMEOUT_SEC);
         if (firstFrameSocket == INVALID_SOCKET) {
+            videoStreamActive = false;
             VideoCallbacks.stop();
             stopVideoDepacketizer();
             PltInterruptThread(&receiveThread);
@@ -385,6 +403,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
     // to send UDP data
     err = PltCreateThread("VideoPing", VideoPingThreadProc, NULL, &udpPingThread);
     if (err != 0) {
+        videoStreamActive = false;
         VideoCallbacks.stop();
         stopVideoDepacketizer();
         PltInterruptThread(&receiveThread);
@@ -414,4 +433,16 @@ int startVideoStream(void* rendererContext, int drFlags) {
     }
 
     return 0;
+}
+
+bool LiGetVideoBytesReceived(uint64_t* totalBytes) {
+    if (!videoStreamActive) {
+        return false;
+    }
+
+    if (totalBytes != NULL) {
+        *totalBytes = videoBytesReceived;
+    }
+
+    return true;
 }
