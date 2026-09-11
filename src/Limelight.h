@@ -947,6 +947,13 @@ bool LiGetHdrMetadata(PSS_HDR_METADATA metadata);
 // frame, just that an IDR frame will arrive soon.
 void LiRequestIdrFrame(void);
 
+// Returns true if host and decoder negotiated reference frame invalidation.
+bool LiIsReferenceFrameInvalidationEnabled(void);
+
+// Client discarded frames [startFrame, endFrame] inclusive without decoding.
+// Uses RFI when enabled; otherwise requests an IDR.
+void LiNotifyClientDroppedFrames(uint32_t startFrame, uint32_t endFrame);
+
 // This function returns any extended feature flags supported by the host.
 #define LI_FF_PEN_TOUCH_EVENTS        0x01 // LiSendTouchEvent()/LiSendPenEvent() supported
 #define LI_FF_CONTROLLER_TOUCH_EVENTS 0x02 // LiSendControllerTouchEvent() supported

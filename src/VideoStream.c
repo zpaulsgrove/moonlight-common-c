@@ -5,6 +5,9 @@
 
 #define FIRST_FRAME_PORT 47996
 
+// Cap on recycled receive buffers (packet payloads we malloc in VideoReceiveThreadProc).
+#define VIDEO_RECV_BUFFER_POOL_SIZE 48
+
 static RTP_VIDEO_QUEUE rtpQueue;
 
 static SOCKET rtpSocket = INVALID_SOCKET;
@@ -22,6 +25,9 @@ static bool receivedFullFrame;
 static uint64_t videoBytesReceived;
 static bool videoStreamActive;
 
+static char* videoRecvBufferPool[VIDEO_RECV_BUFFER_POOL_SIZE];
+static int videoRecvBufferPoolCount;
+
 // We can't request an IDR frame until the depacketizer knows
 // that a packet was lost. This timeout bounds the time that
 // the RTP queue will wait for missing/reordered packets.
@@ -36,6 +42,33 @@ static bool videoStreamActive;
 // and subsequent packet/frame bursts that follow.
 #define RTP_RECV_PACKETS_BUFFERED 2048
 
+static char* allocVideoRecvBuffer(int bufferSize) {
+    if (videoRecvBufferPoolCount > 0) {
+        return videoRecvBufferPool[--videoRecvBufferPoolCount];
+    }
+
+    return (char*)malloc(bufferSize);
+}
+
+static void releaseVideoRecvBuffer(char* buffer) {
+    if (buffer == NULL) {
+        return;
+    }
+
+    if (videoRecvBufferPoolCount < VIDEO_RECV_BUFFER_POOL_SIZE) {
+        videoRecvBufferPool[videoRecvBufferPoolCount++] = buffer;
+    }
+    else {
+        free(buffer);
+    }
+}
+
+static void freeVideoRecvBufferPool(void) {
+    while (videoRecvBufferPoolCount > 0) {
+        free(videoRecvBufferPool[--videoRecvBufferPoolCount]);
+    }
+}
+
 // Initialize the video stream
 void initializeVideoStream(void) {
     initializeVideoDepacketizer(StreamConfig.packetSize);
@@ -46,6 +79,7 @@ void initializeVideoStream(void) {
     receivedFullFrame = false;
     videoBytesReceived = 0;
     videoStreamActive = false;
+    freeVideoRecvBufferPool();
 }
 
 // Clean up the video stream
@@ -53,6 +87,7 @@ void destroyVideoStream(void) {
     PltDestroyCryptoContext(decryptionCtx);
     destroyVideoDepacketizer();
     RtpvCleanupQueue(&rtpQueue);
+    freeVideoRecvBufferPool();
     videoBytesReceived = 0;
     videoStreamActive = false;
 }
@@ -132,7 +167,7 @@ static void VideoReceiveThreadProc(void* context) {
         PRTP_PACKET packet;
 
         if (buffer == NULL) {
-            buffer = (char*)malloc(bufferSize);
+            buffer = allocVideoRecvBuffer(bufferSize);
             if (buffer == NULL) {
                 Limelog("Video Receive: malloc() failed\n");
                 ListenerCallbacks.connectionTerminated(-1);
@@ -244,15 +279,24 @@ static void VideoReceiveThreadProc(void* context) {
             // The queue owns the buffer
             buffer = NULL;
         }
+        else {
+            // Not queued; return to the free-list for reuse instead of freeing
+            releaseVideoRecvBuffer(buffer);
+            buffer = NULL;
+        }
     }
 
     if (buffer != NULL) {
-        free(buffer);
+        releaseVideoRecvBuffer(buffer);
+        buffer = NULL;
     }
 
     if (encryptedBuffer != NULL) {
         free(encryptedBuffer);
     }
+
+    // Drain any buffers still held in the free-list for this stream
+    freeVideoRecvBufferPool();
 }
 
 void notifyKeyFrameReceived(void) {

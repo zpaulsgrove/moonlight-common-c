@@ -25,8 +25,10 @@ static uint8_t opusHeaderByte;
 
 #define MAX_PACKET_SIZE 1400
 
-// Desired audio datagrams buffered in the socket RCVBUF (~350KB).
-#define RTP_AUDIO_RECV_PACKETS_BUFFERED 256
+// Desired audio datagrams buffered in the socket RCVBUF (~90KB at 1400B).
+// 256 (~350KB) covered ~1s worst-case at high packet rates, which is too much
+// latency on Wi-Fi; 64 is an intentional jitter/latency balance.
+#define RTP_AUDIO_RECV_PACKETS_BUFFERED 64
 
 typedef struct _QUEUE_AUDIO_PACKET_HEADER {
     LINKED_BLOCKING_QUEUE_ENTRY lentry;
@@ -102,6 +104,14 @@ int notifyAudioPortNegotiationComplete(void) {
                               SOCK_QOS_TYPE_AUDIO);
     if (rtpSocket == INVALID_SOCKET) {
         return LastSocketFail();
+    }
+
+    {
+        int actualRcvBuf = 0;
+        SOCKADDR_LEN len = sizeof(actualRcvBuf);
+        if (getsockopt(rtpSocket, SOL_SOCKET, SO_RCVBUF, (char*)&actualRcvBuf, &len) == 0) {
+            Limelog("Audio UDP SO_RCVBUF: %d\n", actualRcvBuf);
+        }
     }
 
     // We may receive audio before our threads are started, but that's okay. We'll

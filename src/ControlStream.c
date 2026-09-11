@@ -430,6 +430,19 @@ void LiRequestIdrFrame(void) {
     PltSetEvent(&idrFrameRequiredEvent);
 }
 
+bool LiIsReferenceFrameInvalidationEnabled(void) {
+    return isReferenceFrameInvalidationEnabled();
+}
+
+void LiNotifyClientDroppedFrames(uint32_t startFrame, uint32_t endFrame) {
+    if (isReferenceFrameInvalidationEnabled()) {
+        connectionDetectedFrameLoss(startFrame, endFrame);
+    }
+    else {
+        LiRequestIdrFrame();
+    }
+}
+
 // Invalidate reference frames lost by the network
 void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame) {
     queueFrameInvalidationTuple(startFrame, endFrame);
