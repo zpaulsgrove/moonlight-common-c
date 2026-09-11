@@ -25,10 +25,10 @@ static uint8_t opusHeaderByte;
 
 #define MAX_PACKET_SIZE 1400
 
-// Desired audio datagrams buffered in the socket RCVBUF (~90KB at 1400B).
-// 256 (~350KB) covered ~1s worst-case at high packet rates, which is too much
-// latency on Wi-Fi; 64 is an intentional jitter/latency balance.
-#define RTP_AUDIO_RECV_PACKETS_BUFFERED 64
+// Desired audio datagrams buffered in the socket RCVBUF (~175KB at 1400B).
+// 256 (~350KB) covered ~1s worst-case at high packet rates (too much latency);
+// 64 undershot Wi-Fi jitter and underran. 128 is the latency/underrun balance.
+#define RTP_AUDIO_RECV_PACKETS_BUFFERED 128
 
 typedef struct _QUEUE_AUDIO_PACKET_HEADER {
     LINKED_BLOCKING_QUEUE_ENTRY lentry;
