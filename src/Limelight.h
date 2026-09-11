@@ -569,6 +569,13 @@ const char* LiGetStageName(int stage);
 // This function may only be called between LiStartConnection() and LiStopConnection().
 bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVariance);
 
+// Cumulative FEC recovery counters since connection start (Sunshine/Moonlight Gen5+).
+// Returns false if video stream not active.
+bool LiGetVideoFecStats(uint32_t* recoveredPackets, uint32_t* recoveredFrames, uint32_t* failedFrames);
+
+// Cumulative RTP video payload bytes received (post-socket, pre-FEC assemble). False if inactive.
+bool LiGetVideoBytesReceived(uint64_t* totalBytes);
+
 // This function queues a relative mouse move event to be sent to the remote server.
 int LiSendMouseMoveEvent(short deltaX, short deltaY);
 
@@ -1006,6 +1013,13 @@ bool LiGetHdrMetadata(PSS_HDR_METADATA metadata);
 // call this API instead. Note that this function does not guarantee that the *next* frame will be an IDR
 // frame, just that an IDR frame will arrive soon.
 void LiRequestIdrFrame(void);
+
+// Returns true if host and decoder negotiated reference frame invalidation.
+bool LiIsReferenceFrameInvalidationEnabled(void);
+
+// Client discarded frames [startFrame, endFrame] inclusive without decoding.
+// Uses RFI when enabled; otherwise requests an IDR.
+void LiNotifyClientDroppedFrames(uint32_t startFrame, uint32_t endFrame);
 
 // This function returns any extended feature flags supported by the host.
 #define LI_FF_PEN_TOUCH_EVENTS        0x01 // LiSendTouchEvent()/LiSendPenEvent() supported

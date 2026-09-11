@@ -17,12 +17,42 @@
 // RTP packets use a 90 KHz presentation timestamp clock
 #define PTS_DIVISOR 90
 
+// Cumulative FEC recovery counters for LiGetVideoFecStats()
+static uint32_t videoFecRecoveredPackets;
+static uint32_t videoFecRecoveredFrames;
+static uint32_t videoFecFailedFrames;
+static bool videoFecStatsActive;
+static uint32_t videoFecLastFailedFrameNumber;
+static bool videoFecHasLastFailedFrame;
+
+static void resetVideoFecStats(void) {
+    videoFecRecoveredPackets = 0;
+    videoFecRecoveredFrames = 0;
+    videoFecFailedFrames = 0;
+    videoFecLastFailedFrameNumber = 0;
+    videoFecHasLastFailedFrame = false;
+}
+
+static void recordFailedFecFrame(PRTP_VIDEO_QUEUE queue) {
+    // Avoid double-counting when multiple abandon paths fire for the same frame
+    if (videoFecHasLastFailedFrame &&
+        videoFecLastFailedFrameNumber == queue->currentFrameNumber) {
+        return;
+    }
+    videoFecFailedFrames++;
+    videoFecLastFailedFrameNumber = queue->currentFrameNumber;
+    videoFecHasLastFailedFrame = true;
+}
+
 void RtpvInitializeQueue(PRTP_VIDEO_QUEUE queue) {
     reed_solomon_init();
     memset(queue, 0, sizeof(*queue));
 
     queue->currentFrameNumber = 1;
     queue->multiFecCapable = APP_VERSION_AT_LEAST(7, 1, 431);
+
+    resetVideoFecStats();
+    videoFecStatsActive = true;
 }
 
 static void purgeListEntries(PRTPV_QUEUE_LIST list) {
@@ -39,6 +69,8 @@ static void purgeListEntries(PRTPV_QUEUE_LIST list) {
 void RtpvCleanupQueue(PRTP_VIDEO_QUEUE queue) {
     purgeListEntries(&queue->pendingFecBlockList);
     purgeListEntries(&queue->completedFecBlockList);
+    resetVideoFecStats();
+    videoFecStatsActive = false;
 }
 
 static void insertEntryIntoList(PRTPV_QUEUE_LIST list, PRTPV_QUEUE_ENTRY entry) {
@@ -344,6 +376,12 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
 
         // Report the final FEC status if we needed to perform a recovery
         reportFinalFrameFecStatus(queue);
+
+        if (ret == 0) {
+            uint32_t recovered = queue->bufferDataPackets - queue->receivedDataPackets;
+            videoFecRecoveredPackets += recovered;
+            videoFecRecoveredFrames++;
+        }
     }
 
 cleanup_packets:
@@ -596,6 +634,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
         if (queue->pendingFecBlockList.count != 0) {
             // Report the final status of the FEC queue before dropping this frame
             reportFinalFrameFecStatus(queue);
+            recordFailedFecFrame(queue);
 
             if (queue->multiFecLastBlockNumber != 0) {
                 Limelog("Unrecoverable frame %d (block %d of %d): %d+%d=%d received < %d needed\n",
@@ -640,6 +679,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
         if (fecCurrentBlockNumber != expectedFecBlockNumber) {
             // Report the final status of the FEC queue before dropping this frame
             reportFinalFrameFecStatus(queue);
+            recordFailedFecFrame(queue);
 
             Limelog("Unrecoverable frame %d: lost FEC blocks %d to %d\n",
                     nvPacket->frameIndex,
@@ -802,5 +842,23 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
         return RTPF_RET_QUEUED;
     }
+}
+
+bool LiGetVideoFecStats(uint32_t* recoveredPackets, uint32_t* recoveredFrames, uint32_t* failedFrames) {
+    if (!videoFecStatsActive) {
+        return false;
+    }
+
+    if (recoveredPackets != NULL) {
+        *recoveredPackets = videoFecRecoveredPackets;
+    }
+    if (recoveredFrames != NULL) {
+        *recoveredFrames = videoFecRecoveredFrames;
+    }
+    if (failedFrames != NULL) {
+        *failedFrames = videoFecFailedFrames;
+    }
+
+    return true;
 }
 

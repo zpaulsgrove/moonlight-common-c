@@ -25,6 +25,11 @@ static uint8_t opusHeaderByte;
 
 #define MAX_PACKET_SIZE 1400
 
+// Desired audio datagrams buffered in the socket RCVBUF (~175KB at 1400B).
+// 256 (~350KB) covered ~1s worst-case at high packet rates (too much latency);
+// 64 undershot Wi-Fi jitter and underran. 128 is the latency/underrun balance.
+#define RTP_AUDIO_RECV_PACKETS_BUFFERED 128
+
 typedef struct _QUEUE_AUDIO_PACKET_HEADER {
     LINKED_BLOCKING_QUEUE_ENTRY lentry;
     int size;
@@ -93,9 +98,20 @@ int notifyAudioPortNegotiationComplete(void) {
 
     // For GFE 3.22 compatibility, we must start the audio ping thread before the RTSP handshake.
     // It will not reply to our RTSP PLAY request until the audio ping has been received.
-    rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen, 0, SOCK_QOS_TYPE_AUDIO);
+    // Buffer several audio datagrams to smooth Wi-Fi jitter without using a huge RCVBUF.
+    rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen,
+                              RTP_AUDIO_RECV_PACKETS_BUFFERED * MAX_PACKET_SIZE,
+                              SOCK_QOS_TYPE_AUDIO);
     if (rtpSocket == INVALID_SOCKET) {
         return LastSocketFail();
+    }
+
+    {
+        int actualRcvBuf = 0;
+        SOCKADDR_LEN len = sizeof(actualRcvBuf);
+        if (getsockopt(rtpSocket, SOL_SOCKET, SO_RCVBUF, (char*)&actualRcvBuf, &len) == 0) {
+            Limelog("Audio UDP SO_RCVBUF: %d\n", actualRcvBuf);
+        }
     }
 
     // We may receive audio before our threads are started, but that's okay. We'll
