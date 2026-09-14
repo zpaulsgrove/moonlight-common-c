@@ -34,6 +34,7 @@
 #include <mach/mach_time.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <time.h>
 #include <sys/time.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
