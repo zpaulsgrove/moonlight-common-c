@@ -342,10 +342,13 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
     // really all they have, so we need to be careful not to exceed the cap, even counting
     // things like audio and control data.
     if (StreamConfig.streamingRemotely == STREAM_CFG_REMOTE) {
-        // Subtract 500 Kbps to leave room for audio and control. On remote streams,
-        // GFE will use 96Kbps stereo audio. For local streams, it will choose 512Kbps.
-        if (adjustedBitrate > 500) {
-            adjustedBitrate -= 500;
+        // Reserve headroom for audio and control so total stream bandwidth stays under
+        // the user cap. Normal remote stereo Opus is ~96 kbps (500 kbps total with
+        // control). High-quality stereo is ~512 kbps, so raise the reserve to 1000
+        // (~512 audio + similar control margin). Remote surround never requests HQ.
+        int audioAndControlHeadroomKbps = LiShouldRequestHighQualityAudio() ? 1000 : 500;
+        if (adjustedBitrate > audioAndControlHeadroomKbps) {
+            adjustedBitrate -= audioAndControlHeadroomKbps;
         }
     }
 
@@ -491,8 +494,8 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
     }
 
     if (AppVersionQuad[0] >= 7) {
-        if (StreamConfig.bitrate >= HIGH_AUDIO_BITRATE_THRESHOLD && audioChannelCount > 2 &&
-                HighQualitySurroundSupported && (AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) == 0) {
+        if (LiShouldRequestHighQualityAudio() && audioChannelCount > 2 &&
+                HighQualitySurroundSupported) {
             // Enable high quality mode for surround sound
             err |= addAttributeString(&optionHead, "x-nv-audio.surround.AudioQuality", "1");
 
