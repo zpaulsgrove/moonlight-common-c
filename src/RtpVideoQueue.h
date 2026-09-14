@@ -21,6 +21,16 @@ typedef struct _RTPV_QUEUE_LIST {
     uint32_t count;
 } RTPV_QUEUE_LIST, *PRTPV_QUEUE_LIST;
 
+// Small keyed cache: video FEC shard counts track compressed frame size, so a
+// single-slot context misses often under loss. Keep a few recent (ds,ps) matrices.
+#define RTPV_RS_CACHE_SIZE 8
+
+typedef struct _RTPV_RS_CACHE_ENTRY {
+    reed_solomon* rs;
+    uint32_t dataShards;
+    uint32_t parityShards;
+} RTPV_RS_CACHE_ENTRY;
+
 typedef struct _RTP_VIDEO_QUEUE {
     RTPV_QUEUE_LIST pendingFecBlockList;
     RTPV_QUEUE_LIST completedFecBlockList;
@@ -49,10 +59,8 @@ typedef struct _RTP_VIDEO_QUEUE {
     uint64_t lastOosFramePresentationTimestamp;
     bool receivedOosData;
 
-    // Cached RS context; rebuilt when data/parity shard counts change.
-    reed_solomon* rs;
-    uint32_t rsDataShards;
-    uint32_t rsParityShards;
+    RTPV_RS_CACHE_ENTRY rsCache[RTPV_RS_CACHE_SIZE];
+    int rsCacheCount;
 
     RTP_VIDEO_STATS stats; // the above values are short-lived, this tracks stats for the life of the queue
 } RTP_VIDEO_QUEUE, *PRTP_VIDEO_QUEUE;

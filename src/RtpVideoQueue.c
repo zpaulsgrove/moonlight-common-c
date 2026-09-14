@@ -68,12 +68,58 @@ static void purgeListEntries(PRTPV_QUEUE_LIST list) {
 void RtpvCleanupQueue(PRTP_VIDEO_QUEUE queue) {
     purgeListEntries(&queue->pendingFecBlockList);
     purgeListEntries(&queue->completedFecBlockList);
-    reed_solomon_release(queue->rs);
-    queue->rs = NULL;
-    queue->rsDataShards = 0;
-    queue->rsParityShards = 0;
+    for (int i = 0; i < queue->rsCacheCount; i++) {
+        reed_solomon_release(queue->rsCache[i].rs);
+        queue->rsCache[i].rs = NULL;
+        queue->rsCache[i].dataShards = 0;
+        queue->rsCache[i].parityShards = 0;
+    }
+    queue->rsCacheCount = 0;
     resetVideoFecStats();
     videoFecStatsActive = false;
+}
+
+static reed_solomon* rtpvGetCachedReedSolomon(PRTP_VIDEO_QUEUE queue, uint32_t dataShards, uint32_t parityShards) {
+    for (int i = 0; i < queue->rsCacheCount; i++) {
+        if (queue->rsCache[i].rs != NULL &&
+            queue->rsCache[i].dataShards == dataShards &&
+            queue->rsCache[i].parityShards == parityShards) {
+            // Promote hit to MRU (index 0) so oscillating frame sizes stay warm.
+            if (i > 0) {
+                RTPV_RS_CACHE_ENTRY hit = queue->rsCache[i];
+                for (int j = i; j > 0; j--) {
+                    queue->rsCache[j] = queue->rsCache[j - 1];
+                }
+                queue->rsCache[0] = hit;
+            }
+            return queue->rsCache[0].rs;
+        }
+    }
+
+    reed_solomon* rs = reed_solomon_new((int)dataShards, (int)parityShards);
+    if (rs == NULL) {
+        return NULL;
+    }
+
+    if (queue->rsCacheCount < RTPV_RS_CACHE_SIZE) {
+        // Insert at front; shift existing entries down.
+        for (int i = queue->rsCacheCount; i > 0; i--) {
+            queue->rsCache[i] = queue->rsCache[i - 1];
+        }
+        queue->rsCacheCount++;
+    }
+    else {
+        // Evict LRU (last entry), then insert at front.
+        reed_solomon_release(queue->rsCache[RTPV_RS_CACHE_SIZE - 1].rs);
+        for (int i = RTPV_RS_CACHE_SIZE - 1; i > 0; i--) {
+            queue->rsCache[i] = queue->rsCache[i - 1];
+        }
+    }
+
+    queue->rsCache[0].rs = rs;
+    queue->rsCache[0].dataShards = dataShards;
+    queue->rsCache[0].parityShards = parityShards;
+    return rs;
 }
 
 static void insertEntryIntoList(PRTPV_QUEUE_LIST list, PRTPV_QUEUE_ENTRY entry) {
@@ -301,22 +347,8 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
         goto cleanup;
     }
 
-    // Rebuild the RS matrix only when shard counts change (audio already caches this).
-    if (queue->rs == NULL ||
-        queue->rsDataShards != queue->bufferDataPackets ||
-        queue->rsParityShards != queue->bufferParityPackets) {
-        reed_solomon_release(queue->rs);
-        queue->rs = reed_solomon_new(queue->bufferDataPackets, queue->bufferParityPackets);
-        if (queue->rs != NULL) {
-            queue->rsDataShards = queue->bufferDataPackets;
-            queue->rsParityShards = queue->bufferParityPackets;
-        }
-        else {
-            queue->rsDataShards = 0;
-            queue->rsParityShards = 0;
-        }
-    }
-    rs = queue->rs;
+    // Reuse a small keyed cache of RS matrices; shard counts track compressed size.
+    rs = rtpvGetCachedReedSolomon(queue, queue->bufferDataPackets, queue->bufferParityPackets);
 
     // This could happen in an OOM condition, but it could also mean the FEC data
     // that we fed to reed_solomon_new() is bogus, so we'll assert to get a better look.
@@ -510,7 +542,7 @@ cleanup_packets:
     }
 
 cleanup:
-    // rs is owned by the queue and reused across recoveries.
+    // rs is owned by the queue RS cache and reused across recoveries.
 
     if (packets != NULL)
         free(packets);
