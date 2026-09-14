@@ -69,6 +69,13 @@ typedef struct _STREAM_CONFIGURATION {
     // Specifies the channel configuration of the audio stream.
     // See AUDIO_CONFIGURATION constants and MAKE_AUDIO_CONFIGURATION() below.
     int audioConfiguration;
+
+    // Controls whether high-quality Opus is requested from the host.
+    // See AUDIO_QUALITY_* constants below. AUTO keeps the historical gate
+    // (video bitrate >= 15 Mbps). HIGH always requests HQ; NORMAL never does.
+    // Remote surround still cannot request HQ (MTU safety), and
+    // CAPABILITY_SLOW_OPUS_DECODER still blocks HQ.
+    int audioQuality;
     
     // Specifies the mask of supported video formats.
     // See VIDEO_FORMAT constants below.
@@ -104,6 +111,10 @@ typedef struct _STREAM_CONFIGURATION {
 
 // Use this function to zero the stream configuration when allocated on the stack or heap
 void LiInitializeStreamConfiguration(PSTREAM_CONFIGURATION streamConfig);
+
+// Returns true when the current stream configuration will request high-quality Opus
+// from the host (subject to decoder capability and remote-surround limits).
+bool LiShouldRequestHighQualityAudio(void);
 
 // These identify codec configuration data in the buffer lists
 // of frames identified as IDR frames for H.264 and HEVC formats.
@@ -198,6 +209,13 @@ typedef struct _DECODE_UNIT {
 // Specifies that the audio stream should be in 7.1 surround sound if the PC is able
 #define AUDIO_CONFIGURATION_71_SURROUND MAKE_AUDIO_CONFIGURATION(8, 0x63F)
 
+// Request high-quality Opus when video bitrate is at least 15 Mbps (historical default).
+#define AUDIO_QUALITY_AUTO 0
+// Always request high-quality Opus (512 kbps stereo / uncoupled surround when supported).
+#define AUDIO_QUALITY_HIGH 1
+// Never request high-quality Opus (96 kbps stereo / coupled surround).
+#define AUDIO_QUALITY_NORMAL 2
+
 // Specifies an audio configuration by channel count and channel mask
 // See https://docs.microsoft.com/en-us/windows-hardware/drivers/audio/channel-mask for channelMask values
 // NOTE: Not all combinations are supported by GFE and/or this library.
@@ -246,8 +264,8 @@ typedef struct _DECODE_UNIT {
 #define CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC 0x4
 
 // If set in the audio renderer capabilities field, this flag will cause the RTSP negotiation
-// to never request the "high quality" audio preset. If unset, high quality audio will be
-// used with video streams above 15 Mbps.
+// to never request the "high quality" audio preset. If unset, high quality audio follows
+// STREAM_CONFIGURATION.audioQuality (AUTO uses video streams above 15 Mbps).
 #define CAPABILITY_SLOW_OPUS_DECODER 0x8
 
 // If set in the audio renderer capabilities field, this indicates that audio packets

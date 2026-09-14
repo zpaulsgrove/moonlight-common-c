@@ -128,6 +128,28 @@ void LiInitializeStreamConfiguration(PSTREAM_CONFIGURATION streamConfig) {
     memset(streamConfig, 0, sizeof(*streamConfig));
 }
 
+bool LiShouldRequestHighQualityAudio(void) {
+    if ((AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) != 0) {
+        return false;
+    }
+
+    // Remote surround stays on normal Opus to avoid MTU-related packet loss.
+    if (StreamConfig.streamingRemotely == STREAM_CFG_REMOTE &&
+            CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) > 2) {
+        return false;
+    }
+
+    if (StreamConfig.audioQuality == AUDIO_QUALITY_NORMAL) {
+        return false;
+    }
+    if (StreamConfig.audioQuality == AUDIO_QUALITY_HIGH) {
+        return true;
+    }
+
+    // AUDIO_QUALITY_AUTO: historical 15 Mbps video bitrate gate.
+    return StreamConfig.bitrate >= HIGH_AUDIO_BITRATE_THRESHOLD;
+}
+
 void LiInitializeVideoCallbacks(PDECODER_RENDERER_CALLBACKS drCallbacks) {
     memset(drCallbacks, 0, sizeof(*drCallbacks));
 }

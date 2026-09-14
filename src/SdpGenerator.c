@@ -482,8 +482,8 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
     }
 
     if (AppVersionQuad[0] >= 7) {
-        if (StreamConfig.bitrate >= HIGH_AUDIO_BITRATE_THRESHOLD && audioChannelCount > 2 &&
-                HighQualitySurroundSupported && (AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) == 0) {
+        if (LiShouldRequestHighQualityAudio() && audioChannelCount > 2 &&
+                HighQualitySurroundSupported) {
             // Enable high quality mode for surround sound
             err |= addAttributeString(&optionHead, "x-nv-audio.surround.AudioQuality", "1");
 

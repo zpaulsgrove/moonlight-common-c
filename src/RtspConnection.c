@@ -935,19 +935,12 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
     encryptionCtx = PltCreateCryptoContext();
     decryptionCtx = PltCreateCryptoContext();
 
-    // HACK: In order to get GFE to respect our request for a lower audio bitrate, we must
-    // fake our target address so it doesn't match any of the PC's local interfaces. It seems
-    // that the only way to get it to give you "low quality" stereo audio nowadays is if it
-    // thinks you are remote (target address != any local address).
-    //
-    // We will enable high quality audio if the following are all true:
-    // 1. Video bitrate is higher than 15 Mbps (to ensure most bandwidth is reserved for video)
-    // 2. The audio decoder has not declared that it is slow
-    // 3. The stream is either local or not surround sound (to prevent MTU issues over the Internet)
+    // We will enable high quality audio when LiShouldRequestHighQualityAudio() is true:
+    // AUDIO_QUALITY_HIGH, or AUTO with video bitrate >= 15 Mbps, subject to slow-decoder
+    // and remote-surround limits. Stereo HQ is signaled by using a real Host address
+    // instead of 0.0.0.0; surround HQ uses x-nv-audio.surround.AudioQuality.
     LC_ASSERT(StreamConfig.streamingRemotely != STREAM_CFG_AUTO);
-    if (StreamConfig.bitrate >= HIGH_AUDIO_BITRATE_THRESHOLD &&
-            (AudioCallbacks.capabilities & CAPABILITY_SLOW_OPUS_DECODER) == 0 &&
-            (StreamConfig.streamingRemotely != STREAM_CFG_REMOTE || CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) <= 2)) {
+    if (LiShouldRequestHighQualityAudio()) {
         // If we have an RTSP URL string and it was successfully parsed and copied, use that string
         if (serverInfo->rtspSessionUrl == NULL ||
                 !parseUrlAddrFromRtspUrlString(serverInfo->rtspSessionUrl, urlAddr, sizeof(urlAddr)) ||

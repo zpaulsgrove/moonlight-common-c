@@ -91,7 +91,7 @@ extern uint32_t EncryptionFeaturesEnabled;
 #define UDP_RECV_POLL_TIMEOUT_MS 100
 
 // At this value or above, we will request high quality audio unless CAPABILITY_SLOW_OPUS_DECODER
-// is set on the audio renderer.
+// is set on the audio renderer (AUDIO_QUALITY_AUTO only).
 #define HIGH_AUDIO_BITRATE_THRESHOLD 15000
 
 // Below this value, we will request 20 ms audio frames to reduce bandwidth if the audio
