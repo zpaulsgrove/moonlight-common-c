@@ -2,10 +2,9 @@
 
 #include <rs.h>
 
-#if defined(LC_DEBUG) && !defined(LC_FUZZING)
-// This enables FEC validation mode with a synthetic drop
-// and recovered packet checks vs the original input. It
-// is on by default for debug builds.
+#if defined(LC_DEBUG) && !defined(LC_FUZZING) && defined(LC_FEC_VALIDATION)
+// Opt-in synthetic-drop / memcmp validation. Keep off by default so
+// LC_DEBUG streaming matches release FEC CPU cost.
 //
 // NB: Unlike the video FEC feature of the same name, this
 // is much more restrictive in terms of when the validation

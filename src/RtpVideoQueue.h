@@ -2,6 +2,8 @@
 
 #include "Video.h"
 
+typedef struct _reed_solomon reed_solomon;
+
 typedef struct _RTPV_QUEUE_ENTRY {
     struct _RTPV_QUEUE_ENTRY* next;
     struct _RTPV_QUEUE_ENTRY* prev;
@@ -46,6 +48,11 @@ typedef struct _RTP_VIDEO_QUEUE {
 
     uint64_t lastOosFramePresentationTimestamp;
     bool receivedOosData;
+
+    // Cached RS context; rebuilt when data/parity shard counts change.
+    reed_solomon* rs;
+    uint32_t rsDataShards;
+    uint32_t rsParityShards;
 
     RTP_VIDEO_STATS stats; // the above values are short-lived, this tracks stats for the life of the queue
 } RTP_VIDEO_QUEUE, *PRTP_VIDEO_QUEUE;

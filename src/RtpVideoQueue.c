@@ -2,10 +2,9 @@
 
 #include <rs.h>
 
-#if defined(LC_DEBUG) && !defined(LC_FUZZING)
-// This enables FEC validation mode with a synthetic drop
-// and recovered packet checks vs the original input. It
-// is on by default for debug builds.
+#if defined(LC_DEBUG) && !defined(LC_FUZZING) && defined(LC_FEC_VALIDATION)
+// Opt-in synthetic-drop / memcmp validation. Keep off by default so
+// LC_DEBUG streaming matches release FEC CPU cost.
 #define FEC_VALIDATION_MODE
 #define FEC_VERBOSE
 #endif
@@ -69,6 +68,10 @@ static void purgeListEntries(PRTPV_QUEUE_LIST list) {
 void RtpvCleanupQueue(PRTP_VIDEO_QUEUE queue) {
     purgeListEntries(&queue->pendingFecBlockList);
     purgeListEntries(&queue->completedFecBlockList);
+    reed_solomon_release(queue->rs);
+    queue->rs = NULL;
+    queue->rsDataShards = 0;
+    queue->rsParityShards = 0;
     resetVideoFecStats();
     videoFecStatsActive = false;
 }
@@ -298,7 +301,22 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
         goto cleanup;
     }
 
-    rs = reed_solomon_new(queue->bufferDataPackets, queue->bufferParityPackets);
+    // Rebuild the RS matrix only when shard counts change (audio already caches this).
+    if (queue->rs == NULL ||
+        queue->rsDataShards != queue->bufferDataPackets ||
+        queue->rsParityShards != queue->bufferParityPackets) {
+        reed_solomon_release(queue->rs);
+        queue->rs = reed_solomon_new(queue->bufferDataPackets, queue->bufferParityPackets);
+        if (queue->rs != NULL) {
+            queue->rsDataShards = queue->bufferDataPackets;
+            queue->rsParityShards = queue->bufferParityPackets;
+        }
+        else {
+            queue->rsDataShards = 0;
+            queue->rsParityShards = 0;
+        }
+    }
+    rs = queue->rs;
 
     // This could happen in an OOM condition, but it could also mean the FEC data
     // that we fed to reed_solomon_new() is bogus, so we'll assert to get a better look.
@@ -353,6 +371,8 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
     unsigned int i;
     for (i = 0; i < totalPackets; i++) {
         if (marks[i]) {
+            // Must stay malloc/free-compatible: recovered data shards are owned by the
+            // FEC queue and freed via purgeListEntries() with free().
             packets[i] = malloc(packetBufferSize);
             if (packets[i] == NULL) {
                 ret = -4;
@@ -490,7 +510,7 @@ cleanup_packets:
     }
 
 cleanup:
-    reed_solomon_release(rs);
+    // rs is owned by the queue and reused across recoveries.
 
     if (packets != NULL)
         free(packets);
